@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Athena Youthencore - Attendance</title>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: linear-gradient(135deg, #0f3d3e 0%, #1a5c5e 100%);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      background: #fff; border-radius: 16px; max-width: 400px; width: 100%;
+      padding: 24px; box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+    }
+    h1 { color: #0f3d3e; font-size: 19px; text-align: center; margin-bottom: 2px; }
+    .sub { text-align: center; color: #b8952f; font-size: 12px; margin-bottom: 16px; font-weight: 600; }
+    .video-wrap { position: relative; border-radius: 8px; overflow: hidden; }
+    video { width: 100%; background: #000; display: block; }
+    .scan-status { text-align: center; margin: 12px 0; font-size: 14px; color: #444; min-height: 20px; }
+    .btn { width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 16px; font-weight: 700; color: #fff; background: #1a5c5e; cursor: pointer; margin-top: 8px; }
+    .btn:disabled { background: #ccc; }
+    .btn-manual { background: transparent; color: #888; font-weight: 500; font-size: 13px; text-decoration: underline; margin-top: 10px; }
+    .btn-link { background: transparent; color: #1a5c5e; font-weight: 600; font-size: 13px; text-decoration: underline; margin-top: 14px; text-align: center; }
+    #msg { margin-top: 14px; padding: 12px; border-radius: 8px; font-size: 14px; text-align: center; display: none; }
+    .ok { background: #e3f6e8; color: #1a7a3c; display: block !important; }
+    .err { background: #fde8e8; color: #b3261e; display: block !important; }
+    select { width: 100%; padding: 12px; border: 1.5px solid #ddd; border-radius: 8px; font-size: 16px; margin-top: 8px; display: none; }
+    input[type="password"] { width: 100%; padding: 12px; border: 1.5px solid #ddd; border-radius: 8px; font-size: 16px; margin-top: 8px; display: none; letter-spacing: 4px; text-align: center; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 12px; }
+    th, td { padding: 6px 4px; text-align: left; border-bottom: 1px solid #eee; }
+    th { color: #888; font-weight: 600; }
+    .status-late { color: #b3261e; font-weight: 600; }
+    .status-present { color: #1a7a3c; font-weight: 600; }
+    .status-absent { color: #b3261e; font-weight: 600; }
+    #historyView { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div id="scanView">
+      <h1>Athena Youthencore</h1>
+      <div class="sub">FACE SCAN ATTENDANCE</div>
+
+      <div class="video-wrap">
+        <video id="video" autoplay muted playsinline></video>
+      </div>
+      <div class="scan-status" id="scanStatus">Tap below to start</div>
+
+      <button class="btn" id="btnStartCamera">Start Camera</button>
+      <button class="btn" id="btnScan" style="display:none;" disabled>Loading…</button>
+      <button class="btn btn-manual" id="btnManual" style="display:none;">Face not recognized? Use PIN instead</button>
+      <select id="manualSelect"></select>
+      <input type="password" id="manualPin" maxlength="4" inputmode="numeric" placeholder="Enter 4-digit PIN">
+      <button class="btn" id="btnManualConfirm" style="display:none;">Confirm with PIN</button>
+
+      <div id="msg"></div>
+      <div class="btn-link" id="btnShowHistory">View My Attendance History</div>
+    </div>
+
+    <div id="historyView">
+      <h1>My Attendance</h1>
+      <div class="sub" id="historyName"></div>
+      <table id="historyTable">
+        <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Status</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="btn-link" id="btnBackToScan">Back to Scan</div>
+    </div>
+  </div>
+
+  <script>
+    // ============================================================
+    // SET THIS to your deployed Apps Script Web App URL (ends in /exec)
+    // ============================================================
+    const API_BASE_URL = 'https://script.google.com/macros/s/AKfycbz__E-0snc_R08T2KEHim2LaXpXTHgA7OWq_52Wu54Z80dtUrnvGrgY3_hhAb6OMKI9/exec';
+
+    const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js/weights/';
+    let modelsReady = false;
+    let enrolledFaces = [];
+    let currentLat = null, currentLng = null;
+    let failedAttempts = 0;
+    let lastRecognizedId = null;
+    let lastRecognizedName = null;
+
+    async function apiGet(action, params) {
+      let url = API_BASE_URL + '?action=' + action;
+      if (params) {
+        Object.keys(params).forEach(k => { url += '&' + k + '=' + encodeURIComponent(params[k]); });
+      }
+      const resp = await fetch(url);
+      return resp.json();
+    }
+
+    async function apiPost(action, data) {
+      const body = Object.assign({ action: action }, data);
+      const resp = await fetch(API_BASE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids CORS preflight
+        body: JSON.stringify(body)
+      });
+      return resp.json();
+    }
+
+    async function init() {
+      try {
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+        ]);
+        modelsReady = true;
+      } catch (err) {
+        document.getElementById('scanStatus').textContent = 'Failed to load face models: ' + err.message;
+      }
+
+      try {
+        enrolledFaces = await apiGet('getAllDescriptors');
+      } catch (err) {
+        document.getElementById('scanStatus').textContent = 'Failed to reach server: ' + err.message;
+      }
+    }
+
+    document.getElementById('btnStartCamera').addEventListener('click', async function() {
+      const btn = this;
+      btn.disabled = true;
+      btn.textContent = 'Starting…';
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+        document.getElementById('video').srcObject = stream;
+        btn.style.display = 'none';
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Start Camera';
+        document.getElementById('scanStatus').textContent = 'Camera access failed: ' + err.message;
+        return;
+      }
+
+      requestLocation();
+
+      const scanBtn = document.getElementById('btnScan');
+      scanBtn.style.display = 'block';
+      scanBtn.disabled = !modelsReady || currentLat === null;
+      scanBtn.textContent = modelsReady ? 'Scan My Face' : 'Loading face models…';
+      if (!modelsReady) {
+        const waitForModels = setInterval(function() {
+          if (modelsReady) {
+            scanBtn.disabled = (currentLat === null);
+            scanBtn.textContent = 'Scan My Face';
+            clearInterval(waitForModels);
+          }
+        }, 300);
+      }
+    });
+
+    function requestLocation() {
+      document.getElementById('scanStatus').textContent = 'Getting your location…';
+      if (!navigator.geolocation) {
+        document.getElementById('scanStatus').textContent = 'Location not supported by this browser.';
+        showRetryLocation();
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(function(pos) {
+        currentLat = pos.coords.latitude;
+        currentLng = pos.coords.longitude;
+        document.getElementById('scanStatus').textContent = 'Position your face in frame and tap Scan';
+        document.getElementById('btnScan').disabled = !modelsReady;
+        hideRetryLocation();
+      }, function(err) {
+        document.getElementById('scanStatus').textContent = 'Location access failed: ' + err.message + '. Enable Location Services for this browser, then retry.';
+        showRetryLocation();
+      }, { enableHighAccuracy: true, timeout: 10000 });
+    }
+
+    function showRetryLocation() {
+      let retryBtn = document.getElementById('btnRetryLocation');
+      if (!retryBtn) {
+        retryBtn = document.createElement('button');
+        retryBtn.id = 'btnRetryLocation';
+        retryBtn.className = 'btn btn-manual';
+        retryBtn.textContent = 'Retry Location';
+        retryBtn.addEventListener('click', requestLocation);
+        document.getElementById('scanStatus').insertAdjacentElement('afterend', retryBtn);
+      }
+      retryBtn.style.display = 'block';
+    }
+
+    function hideRetryLocation() {
+      const retryBtn = document.getElementById('btnRetryLocation');
+      if (retryBtn) retryBtn.style.display = 'none';
+    }
+
+    function euclideanDistance(a, b) {
+      let sum = 0;
+      for (let i = 0; i < a.length; i++) sum += (a[i] - b[i]) ** 2;
+      return Math.sqrt(sum);
+    }
+
+    async function scanFace() {
+      if (!modelsReady) return;
+      if (currentLat === null) { setMsg('Waiting for location…', 'err'); return; }
+
+      document.getElementById('btnScan').disabled = true;
+      document.getElementById('scanStatus').textContent = 'Scanning…';
+
+      const video = document.getElementById('video');
+      const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks().withFaceDescriptor();
+
+      document.getElementById('btnScan').disabled = false;
+
+      if (!detection) {
+        handleFailedScan('No face detected. Try better lighting.');
+        return;
+      }
+
+      let bestMatch = null, bestDist = 999;
+      enrolledFaces.forEach(f => {
+        const dist = euclideanDistance(detection.descriptor, f.descriptor);
+        if (dist < bestDist) { bestDist = dist; bestMatch = f; }
+      });
+
+      const threshold = await apiGet('getMatchThreshold');
+      if (bestMatch && bestDist < threshold) {
+        failedAttempts = 0;
+        lastRecognizedId = bestMatch.id;
+        lastRecognizedName = bestMatch.name;
+        submitAttendance(bestMatch.id, 'Face');
+      } else {
+        handleFailedScan('Face not recognized. Try again with better lighting/angle.');
+      }
+    }
+
+    function handleFailedScan(text) {
+      failedAttempts++;
+      document.getElementById('scanStatus').textContent = text;
+      if (failedAttempts >= 2) {
+        document.getElementById('btnManual').style.display = 'block';
+      }
+    }
+
+    async function showManual() {
+      const sel = document.getElementById('manualSelect');
+      sel.style.display = 'block';
+      document.getElementById('manualPin').style.display = 'block';
+      document.getElementById('btnManualConfirm').style.display = 'block';
+      document.getElementById('btnManual').style.display = 'none';
+      const list = await apiGet('getEmployees');
+      sel.innerHTML = '<option value="">-- Select your name --</option>';
+      list.forEach(e => {
+        const opt = document.createElement('option');
+        opt.value = e.id; opt.textContent = e.name;
+        sel.appendChild(opt);
+      });
+    }
+
+    async function manualConfirm() {
+      const empId = document.getElementById('manualSelect').value;
+      const pin = document.getElementById('manualPin').value;
+      if (!empId) { setMsg('Select your name.', 'err'); return; }
+      if (!/^\d{4}$/.test(pin)) { setMsg('Enter your 4-digit PIN.', 'err'); return; }
+
+      setMsg('Verifying PIN…', '');
+      const res = await apiPost('verifyPin', { employeeId: empId, pin: pin });
+      if (!res.success) { setMsg(res.message, 'err'); return; }
+      lastRecognizedId = empId;
+      submitAttendance(empId, 'Manual Override - PIN');
+    }
+
+    async function submitAttendance(empId, method) {
+      setMsg('Processing…', '');
+      try {
+        const status = await apiGet('getStatus', { employeeId: empId });
+        const action = status.state === 'CHECKED_IN' ? 'checkOut' : 'checkIn';
+        const res = await apiPost(action, { employeeId: empId, lat: currentLat, lng: currentLng, matchMethod: method });
+        setMsg(res.message, res.success ? 'ok' : 'err');
+        if (res.success) {
+          document.getElementById('manualPin').value = '';
+          document.getElementById('scanStatus').textContent = 'Position your face in frame and tap Scan';
+        }
+      } catch (err) {
+        setMsg('Error: ' + err.message, 'err');
+      }
+    }
+
+    function setMsg(text, cls) {
+      const msg = document.getElementById('msg');
+      msg.textContent = text;
+      msg.className = cls;
+    }
+
+    async function showHistory() {
+      let empId = lastRecognizedId;
+      if (!empId) {
+        showManual();
+        setMsg('Scan or select your name first to view history.', 'err');
+        return;
+      }
+      const rows = await apiGet('getMyHistory', { employeeId: empId, limit: 30 });
+      document.getElementById('scanView').style.display = 'none';
+      document.getElementById('historyView').style.display = 'block';
+      document.getElementById('historyName').textContent = lastRecognizedName || '';
+      const tbody = document.querySelector('#historyTable tbody');
+      tbody.innerHTML = '';
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+        const statusClass = r.status === 'Late' ? 'status-late' : r.status === 'Absent' ? 'status-absent' : 'status-present';
+        tr.innerHTML = '<td>' + r.date + '</td><td>' + r.checkIn + '</td><td>' + r.checkOut + '</td>' +
+          '<td class="' + statusClass + '">' + r.status + (r.earlyCheckout === 'Y' ? ' (Early Out)' : '') + '</td>';
+        tbody.appendChild(tr);
+      });
+    }
+
+    document.getElementById('btnScan').addEventListener('click', scanFace);
+    document.getElementById('btnManual').addEventListener('click', showManual);
+    document.getElementById('btnManualConfirm').addEventListener('click', manualConfirm);
+    document.getElementById('btnShowHistory').addEventListener('click', showHistory);
+    document.getElementById('btnBackToScan').addEventListener('click', function() {
+      document.getElementById('historyView').style.display = 'none';
+      document.getElementById('scanView').style.display = 'block';
+    });
+
+    init();
+  </script>
+</body>
+</html>

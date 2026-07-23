@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Athena Youthencore - Staff Enrollment</title>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #0f3d3e;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      max-width: 460px;
+      margin: 0 auto;
+      padding: 24px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+    }
+    h1 { color: #0f3d3e; font-size: 19px; text-align: center; margin-bottom: 4px; }
+    .sub { text-align: center; color: #b8952f; font-size: 12px; margin-bottom: 20px; font-weight: 600; }
+    .step { display: none; }
+    .step.active { display: block; }
+    label { display: block; font-size: 13px; color: #444; margin: 14px 0 6px; font-weight: 600; }
+    select, input[type="text"], input[type="tel"], input[type="password"] {
+      width: 100%; padding: 12px; border: 1.5px solid #ddd; border-radius: 8px; font-size: 16px;
+    }
+    input[type="file"] {
+      width: 100%; font-size: 13px; padding: 8px 0;
+    }
+    .doc-row { margin-bottom: 14px; padding: 10px; background: #f7f7f2; border-radius: 8px; }
+    .doc-row.done { background: #e3f6e8; }
+    .doc-label { font-size: 13px; font-weight: 600; color: #333; margin-bottom: 6px; }
+    .doc-status { font-size: 12px; color: #1a7a3c; margin-top: 4px; display: none; }
+    .btn {
+      width: 100%; padding: 14px; border: none; border-radius: 8px;
+      font-size: 16px; font-weight: 700; color: #fff; background: #1a5c5e;
+      margin-top: 18px; cursor: pointer;
+    }
+    .btn-gold { background: #b8952f; }
+    .btn:disabled { background: #ccc; }
+    .video-wrap { position: relative; border-radius: 8px; overflow: hidden; margin-top: 10px; }
+    video { width: 100%; background: #000; display: block; }
+    #msg { margin-top: 14px; padding: 12px; border-radius: 8px; font-size: 14px; text-align: center; display: none; }
+    .ok { background: #e3f6e8; color: #1a7a3c; display: block !important; }
+    .err { background: #fde8e8; color: #b3261e; display: block !important; }
+    .info { background: #eef4fd; color: #1a4d7a; display: block !important; }
+    .progress { display: flex; justify-content: center; gap: 6px; margin-bottom: 18px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #ddd; }
+    .dot.active { background: #b8952f; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Athena Youthencore</h1>
+    <div class="sub">STAFF ENROLLMENT</div>
+
+    <div class="progress">
+      <div class="dot active" id="dot1"></div>
+      <div class="dot" id="dot2"></div>
+      <div class="dot" id="dot3"></div>
+      <div class="dot" id="dot4"></div>
+    </div>
+
+    <!-- STEP 1: Basic details -->
+    <div class="step active" id="step1">
+      <label>Existing enrollment? Select your name</label>
+      <select id="existingEmpSelect"><option value="">-- New staff member --</option></select>
+
+      <div id="newDetails">
+        <label>Full Name</label>
+        <input type="text" id="fullName" placeholder="Your full name">
+
+        <label>Role</label>
+        <select id="roleSelect">
+          <option value="">-- Select Role --</option>
+          <option value="OT Tech">OT Tech</option>
+          <option value="Marketing">Marketing</option>
+          <option value="OT Doctor">OT Doctor</option>
+          <option value="Others">Others</option>
+        </select>
+
+        <label>Phone (WhatsApp number)</label>
+        <input type="tel" id="phone" placeholder="10-digit mobile number">
+      </div>
+
+      <button class="btn" id="btnStep1Next">Continue</button>
+      <div id="msg1"></div>
+    </div>
+
+    <!-- STEP 2: Document uploads -->
+    <div class="step" id="step2">
+      <div id="empIdBanner" style="text-align:center; background:#eef4fd; color:#1a4d7a; padding:8px; border-radius:8px; font-size:13px; font-weight:600; margin-bottom:12px;"></div>
+      <div class="sub" style="margin-bottom:14px;">Upload each document (camera or gallery)</div>
+      <div id="docList"></div>
+      <button class="btn" id="btnStep2Next">Continue to Face Capture</button>
+      <div id="msg2"></div>
+    </div>
+
+    <!-- STEP 3: Face capture -->
+    <div class="step" id="step3">
+      <div class="sub" style="margin-bottom:10px;">Face capture (for daily attendance)</div>
+      <div class="video-wrap">
+        <video id="video" autoplay muted playsinline></video>
+      </div>
+      <div id="loadingModels" style="text-align:center; color:#666; font-size:13px; margin:10px 0;">Loading face models…</div>
+      <button class="btn btn-gold" id="btnStartCamera">Start Camera</button>
+      <button class="btn btn-gold" id="btnCapture" style="display:none;" disabled>Loading camera…</button>
+      <div id="msg3"></div>
+      <div id="captureCount" style="text-align:center; font-size:12px; color:#888; margin-top:8px;"></div>
+      <button class="btn" id="btnStep3Next" style="display:none;">Continue to PIN Setup</button>
+    </div>
+
+    <!-- STEP 4: PIN setup -->
+    <div class="step" id="step4">
+      <div class="sub" style="margin-bottom:10px;">Set your 4-digit PIN</div>
+      <label>This PIN is your backup if face scan doesn't recognize you. Keep it private.</label>
+      <label>Enter PIN</label>
+      <input type="password" id="pin1" maxlength="4" inputmode="numeric" placeholder="••••">
+      <label>Confirm PIN</label>
+      <input type="password" id="pin2" maxlength="4" inputmode="numeric" placeholder="••••">
+      <button class="btn btn-gold" id="btnFinish">Finish Enrollment</button>
+      <div id="msg4"></div>
+      <div id="finalIdBanner" style="display:none; text-align:center; background:#e3f6e8; color:#1a7a3c; padding:16px; border-radius:8px; margin-top:14px;">
+        <div style="font-size:13px; font-weight:600;">Your Staff ID (save this — used for login in other Athena systems):</div>
+        <div style="font-size:26px; font-weight:800; letter-spacing:1px; margin-top:6px;" id="finalIdValue"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // ============================================================
+    // SET THIS to your deployed Apps Script Web App URL (ends in /exec)
+    // ============================================================
+    const API_BASE_URL = 'https://script.google.com/macros/s/AKfycbz__E-0snc_R08T2KEHim2LaXpXTHgA7OWq_52Wu54Z80dtUrnvGrgY3_hhAb6OMKI9/exec';
+
+    const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js/weights/';
+    let currentEmployeeId = null;
+    let currentRole = null;
+    let docTypeList = [];
+    let uploadedDocs = {};
+    let modelsReady = false;
+    let capturedDescriptors = [];
+
+    async function apiGet(action, params) {
+      let url = API_BASE_URL + '?action=' + action;
+      if (params) {
+        Object.keys(params).forEach(k => { url += '&' + k + '=' + encodeURIComponent(params[k]); });
+      }
+      const resp = await fetch(url);
+      return resp.json();
+    }
+
+    async function apiPost(action, data) {
+      const body = Object.assign({ action: action }, data);
+      const resp = await fetch(API_BASE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids CORS preflight
+        body: JSON.stringify(body)
+      });
+      return resp.json();
+    }
+
+    // ---------- Step navigation ----------
+    function showStep(n) {
+      document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+      document.getElementById('step' + n).classList.add('active');
+      for (let i = 1; i <= 4; i++) {
+        document.getElementById('dot' + i).classList.toggle('active', i <= n);
+      }
+    }
+
+    function setMsg(id, text, cls) {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      el.className = cls;
+    }
+
+    // ---------- Step 1 ----------
+    async function loadExistingEmployees() {
+      const list = await apiGet('getEmployeesForEnroll');
+      const sel = document.getElementById('existingEmpSelect');
+      sel.innerHTML = '<option value="">-- New staff member --</option>';
+      list.forEach(e => {
+        const opt = document.createElement('option');
+        opt.value = e.id;
+        opt.textContent = e.name + ' (' + e.role + ')' + (e.hasface ? ' - face enrolled' : ' - face NOT enrolled');
+        opt.dataset.role = e.role;
+        sel.appendChild(opt);
+      });
+    }
+
+    document.getElementById('existingEmpSelect').addEventListener('change', function() {
+      const newDetails = document.getElementById('newDetails');
+      newDetails.style.display = this.value ? 'none' : 'block';
+    });
+
+    document.getElementById('btnStep1Next').addEventListener('click', async function() {
+      const existingId = document.getElementById('existingEmpSelect').value;
+      const btn = this;
+
+      if (existingId) {
+        const opt = document.getElementById('existingEmpSelect').selectedOptions[0];
+        currentEmployeeId = existingId;
+        currentRole = opt.dataset.role;
+        document.getElementById('empIdBanner').textContent = 'Your Staff ID: ' + currentEmployeeId;
+        proceedToDocs();
+        return;
+      }
+
+      const name = document.getElementById('fullName').value.trim();
+      const role = document.getElementById('roleSelect').value;
+      const phone = document.getElementById('phone').value.trim();
+
+      if (!name || !role || !phone) {
+        setMsg('msg1', 'Please fill in name, role, and phone.', 'err');
+        return;
+      }
+
+      btn.disabled = true;
+      setMsg('msg1', 'Creating record…', 'info');
+      try {
+        const res = await apiPost('createEmployee', { name: name, role: role, phone: phone });
+        btn.disabled = false;
+        if (!res.success) { setMsg('msg1', res.message, 'err'); return; }
+        currentEmployeeId = res.employeeId;
+        currentRole = role;
+        setMsg('msg1', '', '');
+        document.getElementById('empIdBanner').textContent = 'Your Staff ID: ' + currentEmployeeId;
+        proceedToDocs();
+      } catch (err) {
+        btn.disabled = false;
+        setMsg('msg1', 'Error: ' + err.message, 'err');
+      }
+    });
+
+    async function proceedToDocs() {
+      docTypeList = await apiGet('getDocumentList', { role: currentRole });
+      renderDocList();
+      showStep(2);
+    }
+
+    // ---------- Step 2: documents ----------
+    function renderDocList() {
+      const container = document.getElementById('docList');
+      container.innerHTML = '';
+      docTypeList.forEach(doc => {
+        const row = document.createElement('div');
+        row.className = 'doc-row';
+        row.id = 'docrow-' + doc.key;
+        row.innerHTML =
+          '<div class="doc-label">' + doc.label + '</div>' +
+          '<input type="file" accept="image/*,application/pdf" data-key="' + doc.key + '" data-label="' + doc.label + '">' +
+          '<div class="doc-status" id="docstatus-' + doc.key + '">Uploaded ✓</div>';
+        container.appendChild(row);
+      });
+
+      container.querySelectorAll('input[type="file"]').forEach(input => {
+        input.addEventListener('change', handleDocUpload);
+      });
+    }
+
+    function handleDocUpload(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const key = e.target.dataset.key;
+      const label = e.target.dataset.label;
+
+      const reader = new FileReader();
+      reader.onload = async function() {
+        const base64Data = reader.result.split(',')[1];
+        setMsg('msg2', 'Uploading ' + label + '…', 'info');
+        try {
+          const res = await apiPost('uploadDocument', {
+            employeeId: currentEmployeeId, docTypeKey: key, docTypeLabel: label,
+            base64Data: base64Data, mimeType: file.type, fileName: file.name
+          });
+          if (res.success) {
+            uploadedDocs[key] = true;
+            document.getElementById('docrow-' + key).classList.add('done');
+            document.getElementById('docstatus-' + key).style.display = 'block';
+            setMsg('msg2', '', '');
+          } else {
+            setMsg('msg2', res.message, 'err');
+          }
+        } catch (err) {
+          setMsg('msg2', 'Upload error: ' + err.message, 'err');
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+
+    document.getElementById('btnStep2Next').addEventListener('click', function() {
+      const mandatory = docTypeList.filter(d => !d.key.includes('cert_pg'));
+      const missing = mandatory.filter(d => !uploadedDocs[d.key]);
+      if (missing.length > 0) {
+        setMsg('msg2', 'Please upload: ' + missing.map(d => d.label).join(', '), 'err');
+        return;
+      }
+      showStep(3);
+      loadFaceModels();
+    });
+
+    // ---------- Step 3: face capture ----------
+    async function loadFaceModels() {
+      if (modelsReady) return;
+      try {
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+        ]);
+        modelsReady = true;
+        document.getElementById('loadingModels').style.display = 'none';
+      } catch (err) {
+        document.getElementById('loadingModels').textContent = 'Failed to load face models: ' + err.message;
+      }
+    }
+
+    document.getElementById('btnStartCamera').addEventListener('click', async function() {
+      const btn = this;
+      btn.disabled = true;
+      btn.textContent = 'Starting…';
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+        document.getElementById('video').srcObject = stream;
+        btn.style.display = 'none';
+        const captureBtn = document.getElementById('btnCapture');
+        captureBtn.style.display = 'block';
+        captureBtn.disabled = !modelsReady;
+        captureBtn.textContent = modelsReady ? 'Capture Face Sample' : 'Loading face models…';
+        if (!modelsReady) {
+          const waitForModels = setInterval(function() {
+            if (modelsReady) {
+              captureBtn.disabled = false;
+              captureBtn.textContent = 'Capture Face Sample';
+              clearInterval(waitForModels);
+            }
+          }, 300);
+        }
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = 'Start Camera';
+        setMsg('msg3', 'Camera access failed: ' + err.message, 'err');
+      }
+    });
+
+    document.getElementById('btnCapture').addEventListener('click', async function() {
+      if (!modelsReady) return;
+      setMsg('msg3', 'Detecting face…', 'info');
+      const video = document.getElementById('video');
+      const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks().withFaceDescriptor();
+
+      if (!detection) {
+        setMsg('msg3', 'No face detected. Face the camera in good light.', 'err');
+        return;
+      }
+
+      capturedDescriptors.push(Array.from(detection.descriptor));
+      document.getElementById('captureCount').textContent = capturedDescriptors.length + ' sample(s) captured';
+      setMsg('msg3', 'Sample captured.', 'ok');
+
+      if (capturedDescriptors.length >= 3) {
+        document.getElementById('btnCapture').style.display = 'none';
+        document.getElementById('btnStep3Next').style.display = 'block';
+      }
+    });
+
+    document.getElementById('btnStep3Next').addEventListener('click', async function() {
+      const avg = capturedDescriptors[0].map((_, i) => {
+        const sum = capturedDescriptors.reduce((s, d) => s + d[i], 0);
+        return sum / capturedDescriptors.length;
+      });
+      this.disabled = true;
+      setMsg('msg3', 'Saving face data…', 'info');
+      try {
+        const res = await apiPost('saveFaceDescriptor', { employeeId: currentEmployeeId, descriptorArray: avg });
+        setMsg('msg3', res.message, res.success ? 'ok' : 'err');
+        if (res.success) showStep(4);
+      } catch (err) {
+        setMsg('msg3', 'Error: ' + err.message, 'err');
+      }
+    });
+
+    // ---------- Step 4: PIN ----------
+    document.getElementById('btnFinish').addEventListener('click', async function() {
+      const pin1 = document.getElementById('pin1').value;
+      const pin2 = document.getElementById('pin2').value;
+
+      if (!/^\d{4}$/.test(pin1)) { setMsg('msg4', 'PIN must be exactly 4 digits.', 'err'); return; }
+      if (pin1 !== pin2) { setMsg('msg4', 'PINs do not match.', 'err'); return; }
+
+      this.disabled = true;
+      setMsg('msg4', 'Saving…', 'info');
+      try {
+        const res = await apiPost('setPin', { employeeId: currentEmployeeId, pin: pin1 });
+        if (res.success) {
+          setMsg('msg4', 'Enrollment complete! You can now use the daily attendance page.', 'ok');
+          document.getElementById('finalIdValue').textContent = currentEmployeeId;
+          document.getElementById('finalIdBanner').style.display = 'block';
+        } else {
+          setMsg('msg4', res.message, 'err');
+          document.getElementById('btnFinish').disabled = false;
+        }
+      } catch (err) {
+        setMsg('msg4', 'Error: ' + err.message, 'err');
+        document.getElementById('btnFinish').disabled = false;
+      }
+    });
+
+    loadExistingEmployees();
+  </script>
+</body>
+</html>
