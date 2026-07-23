@@ -240,6 +240,19 @@
 
     async function proceedToDocs() {
       docTypeList = await apiGet('getDocumentList', { role: currentRole });
+
+      // Pre-fill uploadedDocs with anything already on file — matters for
+      // someone returning later to finish an incomplete enrollment.
+      uploadedDocs = {};
+      try {
+        const existingTypes = await apiGet('getUploadedDocTypes', { employeeId: currentEmployeeId });
+        docTypeList.forEach(doc => {
+          if (existingTypes.indexOf(doc.label) !== -1) uploadedDocs[doc.key] = true;
+        });
+      } catch (err) {
+        // if this fails, just start with a blank uploadedDocs — not fatal
+      }
+
       renderDocList();
       showStep(2);
     }
@@ -249,13 +262,14 @@
       const container = document.getElementById('docList');
       container.innerHTML = '';
       docTypeList.forEach(doc => {
+        const alreadyUploaded = !!uploadedDocs[doc.key];
         const row = document.createElement('div');
-        row.className = 'doc-row';
+        row.className = 'doc-row' + (alreadyUploaded ? ' done' : '');
         row.id = 'docrow-' + doc.key;
         row.innerHTML =
           '<div class="doc-label">' + doc.label + '</div>' +
           '<input type="file" accept="image/*,application/pdf" data-key="' + doc.key + '" data-label="' + doc.label + '">' +
-          '<div class="doc-status" id="docstatus-' + doc.key + '">Uploaded ✓</div>';
+          '<div class="doc-status" id="docstatus-' + doc.key + '" style="' + (alreadyUploaded ? 'display:block;' : '') + '">Uploaded ✓</div>';
         container.appendChild(row);
       });
 
@@ -298,8 +312,12 @@
       const mandatory = docTypeList.filter(d => !d.key.includes('cert_pg'));
       const missing = mandatory.filter(d => !uploadedDocs[d.key]);
       if (missing.length > 0) {
-        setMsg('msg2', 'Please upload: ' + missing.map(d => d.label).join(', '), 'err');
-        return;
+        const proceed = confirm(
+          'The following documents are not uploaded yet:\n\n' +
+          missing.map(d => '• ' + d.label).join('\n') +
+          '\n\nYou can continue enrollment now and upload these later. Continue anyway?'
+        );
+        if (!proceed) return;
       }
       showStep(3);
       loadFaceModels();
