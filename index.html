@@ -62,6 +62,18 @@
       <div class="btn-link" id="btnShowHistory">View My Attendance History</div>
     </div>
 
+    <div id="confirmView" style="display:none; text-align:center;">
+      <h1>Athena Youthencore</h1>
+      <div class="sub">CONFIRM ATTENDANCE</div>
+      <div id="confirmGreeting" style="font-size:18px; font-weight:700; color:#0f3d3e; margin:20px 0 6px;"></div>
+      <div id="confirmActionLabel" style="font-size:15px; font-weight:700; padding:10px; border-radius:8px; margin-bottom:8px;"></div>
+      <div id="confirmTime" style="font-size:13px; color:#666; margin-bottom:6px;"></div>
+      <div id="confirmWarning" style="display:none; font-size:13px; color:#b3261e; background:#fde8e8; border-radius:8px; padding:10px; margin-bottom:10px;"></div>
+      <button class="btn" id="btnConfirmAction" style="background:#1a5c5e;"></button>
+      <button class="btn btn-manual" id="btnCancelAction" style="margin-top:8px;">Cancel — go back</button>
+      <div id="confirmMsg"></div>
+    </div>
+
     <div id="historyView">
       <h1>My Attendance</h1>
       <div class="sub" id="historyName"></div>
@@ -230,7 +242,7 @@
         failedAttempts = 0;
         lastRecognizedId = bestMatch.id;
         lastRecognizedName = bestMatch.name;
-        submitAttendance(bestMatch.id, 'Face');
+        showConfirmScreen(bestMatch.id, bestMatch.name, 'Face');
       } else {
         handleFailedScan('Face not recognized. Try again with better lighting/angle.');
       }
@@ -262,6 +274,7 @@
     async function manualConfirm() {
       const empId = document.getElementById('manualSelect').value;
       const pin = document.getElementById('manualPin').value;
+      const empName = document.getElementById('manualSelect').selectedOptions[0] ? document.getElementById('manualSelect').selectedOptions[0].textContent : '';
       if (!empId) { setMsg('Select your name.', 'err'); return; }
       if (!/^\d{4}$/.test(pin)) { setMsg('Enter your 4-digit PIN.', 'err'); return; }
 
@@ -269,23 +282,88 @@
       const res = await apiPost('verifyPin', { employeeId: empId, pin: pin });
       if (!res.success) { setMsg(res.message, 'err'); return; }
       lastRecognizedId = empId;
-      submitAttendance(empId, 'Manual Override - PIN');
+      lastRecognizedName = empName;
+      showConfirmScreen(empId, empName, 'Manual Override - PIN');
     }
 
-    async function submitAttendance(empId, method) {
-      setMsg('Processing…', '');
+    // ---------- Confirmation step — nothing is written until the
+    // person explicitly taps Confirm, preventing accidental
+    // check-in/check-out from repeated scans. ----------
+    let pendingAction = null; // 'checkIn' or 'checkOut'
+    let pendingEmpId = null;
+    let pendingMethod = null;
+
+    async function showConfirmScreen(empId, empName, method) {
+      setMsg('', '');
+      const status = await apiGet('getStatus', { employeeId: empId });
+      pendingAction = status.state === 'CHECKED_IN' ? 'checkOut' : 'checkIn';
+      pendingEmpId = empId;
+      pendingMethod = method;
+
+      document.getElementById('scanView').style.display = 'none';
+      document.getElementById('confirmView').style.display = 'block';
+      document.getElementById('confirmGreeting').textContent = 'Hi ' + empName + '!';
+
+      const actionLabel = document.getElementById('confirmActionLabel');
+      const confirmBtn = document.getElementById('btnConfirmAction');
+      const warningBox = document.getElementById('confirmWarning');
+      warningBox.style.display = 'none';
+
+      const nowStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+      document.getElementById('confirmTime').textContent = 'Current time: ' + nowStr;
+
+      if (pendingAction === 'checkIn') {
+        actionLabel.textContent = 'This will mark you as CHECKED IN';
+        actionLabel.style.background = '#e3f6e8';
+        actionLabel.style.color = '#1a7a3c';
+        confirmBtn.textContent = 'Confirm Check-In';
+        confirmBtn.style.background = '#1a7a3c';
+      } else {
+        actionLabel.textContent = 'This will mark you as CHECKED OUT';
+        actionLabel.style.background = '#fdf3e3';
+        actionLabel.style.color = '#b8952f';
+        confirmBtn.textContent = 'Confirm Check-Out';
+        confirmBtn.style.background = '#b8952f';
+
+        // Warn if checking out very soon after checking in — likely
+        // an accidental double-scan rather than an intentional early leave.
+        if (status.checkInTime) {
+          const minutesSinceCheckIn = (new Date() - new Date(status.checkInTime)) / 60000;
+          if (minutesSinceCheckIn < 15) {
+            warningBox.style.display = 'block';
+            warningBox.textContent = '⚠️ You checked in only ' + Math.round(minutesSinceCheckIn) + ' minute(s) ago. If this is a mistake, tap Cancel instead.';
+          }
+        }
+      }
+    }
+
+    document.getElementById('btnConfirmAction').addEventListener('click', async function() {
+      this.disabled = true;
+      document.getElementById('confirmMsg').textContent = 'Processing…';
+      document.getElementById('confirmMsg').className = '';
       try {
-        const status = await apiGet('getStatus', { employeeId: empId });
-        const action = status.state === 'CHECKED_IN' ? 'checkOut' : 'checkIn';
-        const res = await apiPost(action, { employeeId: empId, lat: currentLat, lng: currentLng, matchMethod: method });
-        setMsg(res.message, res.success ? 'ok' : 'err');
+        const res = await apiPost(pendingAction, { employeeId: pendingEmpId, lat: currentLat, lng: currentLng, matchMethod: pendingMethod });
+        document.getElementById('confirmMsg').textContent = res.message;
+        document.getElementById('confirmMsg').className = res.success ? 'ok' : 'err';
+        this.disabled = false;
         if (res.success) {
-          document.getElementById('manualPin').value = '';
-          document.getElementById('scanStatus').textContent = 'Position your face in frame and tap Scan';
+          setTimeout(backToScanFromConfirm, 1800);
         }
       } catch (err) {
-        setMsg('Error: ' + err.message, 'err');
+        document.getElementById('confirmMsg').textContent = 'Error: ' + err.message;
+        document.getElementById('confirmMsg').className = 'err';
+        this.disabled = false;
       }
+    });
+
+    document.getElementById('btnCancelAction').addEventListener('click', backToScanFromConfirm);
+
+    function backToScanFromConfirm() {
+      document.getElementById('confirmView').style.display = 'none';
+      document.getElementById('scanView').style.display = 'block';
+      document.getElementById('confirmMsg').textContent = '';
+      document.getElementById('manualPin').value = '';
+      document.getElementById('scanStatus').textContent = 'Position your face in frame and tap Scan';
     }
 
     function setMsg(text, cls) {
