@@ -182,6 +182,13 @@
         showRetryLocation();
         return;
       }
+      // enableHighAccuracy:false uses fast WiFi/cell-tower location
+      // (~1-2 seconds, accurate to ~20-50m) instead of a slow GPS
+      // satellite fix (can take 5-10+ seconds indoors, sometimes never
+      // resolving before timing out). Our 150m geofence doesn't need
+      // GPS-level precision, so this trade is a clear win for speed.
+      // maximumAge lets it reuse a location from the last 60 seconds
+      // instead of always requesting a brand new fix.
       navigator.geolocation.getCurrentPosition(function(pos) {
         currentLat = pos.coords.latitude;
         currentLng = pos.coords.longitude;
@@ -191,7 +198,7 @@
       }, function(err) {
         document.getElementById('scanStatus').textContent = 'Location access failed: ' + err.message + '. Enable Location Services for this browser, then retry.';
         showRetryLocation();
-      }, { enableHighAccuracy: true, timeout: 10000 });
+      }, { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 });
     }
 
     function showRetryLocation() {
@@ -226,7 +233,7 @@
       document.getElementById('scanStatus').textContent = 'Scanning…';
 
       const video = document.getElementById('video');
-      const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+      const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224 }))
         .withFaceLandmarks().withFaceDescriptor();
 
       document.getElementById('btnScan').disabled = false;
@@ -369,7 +376,7 @@
         document.getElementById('confirmMsg').className = res.success ? 'ok' : 'err';
         this.disabled = false;
         if (res.success) {
-          setTimeout(backToScanFromConfirm, 1800);
+          setTimeout(backToScanFromConfirm, 1200);
         }
       } catch (err) {
         document.getElementById('confirmMsg').textContent = 'Error: ' + err.message;
