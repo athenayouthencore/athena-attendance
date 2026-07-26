@@ -53,7 +53,7 @@
 
       <button class="btn" id="btnStartCamera">Start Camera</button>
       <button class="btn" id="btnScan" style="display:none;" disabled>Loading…</button>
-      <button class="btn btn-manual" id="btnManual" style="display:none;">Face not recognized? Use PIN instead</button>
+      <button class="btn btn-manual" id="btnManual" style="display:none;">Or check in using Staff ID &amp; PIN</button>
       <select id="manualSelect"></select>
       <input type="password" id="manualPin" maxlength="4" inputmode="numeric" placeholder="Enter 4-digit PIN">
       <button class="btn" id="btnManualConfirm" style="display:none;">Confirm with PIN</button>
@@ -168,6 +168,11 @@
           }
         }, 300);
       }
+
+      // ID + PIN login is available immediately alongside face scan —
+      // not gated behind failed face-scan attempts — since it still
+      // needs the same GPS location captured just above for geofencing.
+      document.getElementById('btnManual').style.display = 'block';
     });
 
     function requestLocation() {
