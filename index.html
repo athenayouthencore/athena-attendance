@@ -126,6 +126,7 @@
           faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
         ]);
         modelsReady = true;
+        warmUpModels_(); // fire-and-forget — pre-compiles WebGL kernels so the person's actual first scan isn't the slow one
       } catch (err) {
         document.getElementById('scanStatus').textContent = 'Failed to load face models: ' + err.message;
       }
@@ -137,13 +138,31 @@
       }
     }
 
+    // Runs one throwaway detection pass on a blank canvas right after
+    // models finish loading. The first time face-api actually runs
+    // inference, the browser has to compile its WebGL processing
+    // pipeline — a one-time cost per page load. Doing that here, in
+    // the background, means the person's real first scan attempt
+    // doesn't have to pay that cost.
+    async function warmUpModels_() {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 224; canvas.height = 224;
+        await faceapi.detectSingleFace(canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 224 }));
+      } catch (err) {
+        // warm-up is best-effort only — a failure here doesn't affect real scanning
+      }
+    }
+
     document.getElementById('btnStartCamera').addEventListener('click', async function() {
       const btn = this;
       btn.disabled = true;
       btn.textContent = 'Starting…';
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 480 }, height: { ideal: 640 } }
+        });
         document.getElementById('video').srcObject = stream;
         btn.style.display = 'none';
       } catch (err) {
