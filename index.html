@@ -68,6 +68,7 @@
       <div id="confirmGreeting" style="font-size:18px; font-weight:700; color:#0f3d3e; margin:20px 0 6px;"></div>
       <div id="confirmActionLabel" style="font-size:15px; font-weight:700; padding:10px; border-radius:8px; margin-bottom:8px;"></div>
       <div id="confirmTime" style="font-size:13px; color:#666; margin-bottom:6px;"></div>
+      <div id="confirmAbsentSummary" style="display:none; font-size:12px; color:#b3261e; background:#fde8e8; border-radius:8px; padding:8px 10px; margin-bottom:10px;"></div>
       <div id="confirmWarning" style="display:none; font-size:13px; color:#b3261e; background:#fde8e8; border-radius:8px; padding:10px; margin-bottom:10px;"></div>
       <button class="btn" id="btnConfirmAction" style="background:#1a5c5e;"></button>
       <button class="btn btn-manual" id="btnCancelAction" style="margin-top:8px;">Cancel — go back</button>
@@ -98,6 +99,21 @@
     let failedAttempts = 0;
     let lastRecognizedId = null;
     let lastRecognizedName = null;
+
+    // A persistent ID for THIS specific device/browser — generated once
+    // and stored locally, used to lock each staff member to the device
+    // they first check in from. Prevents a face-matching error from
+    // silently checking in the wrong person: if this device is already
+    // locked to someone else, the server rejects the attempt outright.
+    function getDeviceId_() {
+      let id = localStorage.getItem('athena_device_id');
+      if (!id) {
+        id = 'dev_' + Date.now() + '_' + Math.random().toString(36).substring(2, 12);
+        localStorage.setItem('athena_device_id', id);
+      }
+      return id;
+    }
+    const currentDeviceId = getDeviceId_();
 
     async function apiGet(action, params) {
       let url = API_BASE_URL + '?action=' + action;
@@ -324,13 +340,41 @@
     let pendingEmpId = null;
     let pendingMethod = null;
 
+    async function showAbsentSummaryForMonth(empId) {
+      const box = document.getElementById('confirmAbsentSummary');
+      box.style.display = 'none';
+      try {
+        const result = await apiGet('getMissedDatesForMonth', { employeeId: empId });
+        const now = new Date();
+        const monthName = now.toLocaleString('en-IN', { month: 'long' });
+        const totalMissed = (result.absentDates || []).length + (result.noRecordDates || []).length;
+
+        if (totalMissed > 0) {
+          box.style.display = 'block';
+          box.style.background = '#fde8e8';
+          box.style.color = '#b3261e';
+          box.style.fontWeight = '600';
+          let html = '⚠️ ' + monthName + ' — ' + totalMissed + ' day(s) with no attendance recorded:<br>';
+          if (result.absentDates.length > 0) {
+            html += '<span style="font-weight:400;">Marked Absent: ' + result.absentDates.join(', ') + '</span><br>';
+          }
+          if (result.noRecordDates.length > 0) {
+            html += '<span style="font-weight:400;">No record at all: ' + result.noRecordDates.join(', ') + '</span>';
+          }
+          box.innerHTML = html;
+        }
+      } catch (err) {
+        // best-effort only — don't block the confirm screen if this fails
+      }
+    }
+
     async function showConfirmScreen(empId, empName, method) {
       setMsg('', '');
       const status = await apiGet('getStatus', { employeeId: empId });
 
       document.getElementById('scanView').style.display = 'none';
       document.getElementById('confirmView').style.display = 'block';
-      document.getElementById('confirmGreeting').textContent = 'Hi ' + empName + '!';
+      document.getElementById('confirmGreeting').innerHTML = 'Hi ' + empName + '! <span style="font-size:12px; font-weight:400; color:#888;">(' + empId + ')</span>';
 
       const actionLabel = document.getElementById('confirmActionLabel');
       const confirmBtn = document.getElementById('btnConfirmAction');
@@ -339,6 +383,8 @@
 
       const nowStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
       document.getElementById('confirmTime').textContent = 'Current time: ' + nowStr;
+
+      showAbsentSummaryForMonth(empId); // fire-and-forget, doesn't block the rest of the screen
 
       // Already fully completed today (checked in AND out) — nothing
       // more to do. Show this clearly instead of a misleading "will
@@ -390,7 +436,7 @@
       document.getElementById('confirmMsg').textContent = 'Processing…';
       document.getElementById('confirmMsg').className = '';
       try {
-        const res = await apiPost(pendingAction, { employeeId: pendingEmpId, lat: currentLat, lng: currentLng, matchMethod: pendingMethod });
+        const res = await apiPost(pendingAction, { employeeId: pendingEmpId, lat: currentLat, lng: currentLng, matchMethod: pendingMethod, deviceId: currentDeviceId });
         document.getElementById('confirmMsg').textContent = res.message;
         document.getElementById('confirmMsg').className = res.success ? 'ok' : 'err';
         this.disabled = false;
