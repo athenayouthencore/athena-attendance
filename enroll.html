@@ -102,7 +102,7 @@
 
     <!-- STEP 3: Face capture -->
     <div class="step" id="step3">
-      <div class="sub" style="margin-bottom:10px;">Face capture (for daily attendance)</div>
+      <div class="sub" style="margin-bottom:10px;">Face capture (for daily attendance) — 6 samples, slightly different angle each time for best accuracy</div>
       <div class="video-wrap">
         <video id="video" autoplay muted playsinline></video>
       </div>
@@ -144,6 +144,7 @@
     let docTypeList = [];
     let uploadedDocs = {};
     let modelsReady = false;
+    const FACE_SAMPLES_REQUIRED = 6; // more samples = more accurate face matching, fewer cross-identity mix-ups
     let capturedDescriptors = [];
 
     async function apiGet(action, params) {
@@ -380,10 +381,11 @@
       }
 
       capturedDescriptors.push(Array.from(detection.descriptor));
-      document.getElementById('captureCount').textContent = capturedDescriptors.length + ' sample(s) captured';
-      setMsg('msg3', 'Sample captured.', 'ok');
+      const remaining = FACE_SAMPLES_REQUIRED - capturedDescriptors.length;
+      document.getElementById('captureCount').textContent = capturedDescriptors.length + ' / ' + FACE_SAMPLES_REQUIRED + ' sample(s) captured';
+      setMsg('msg3', remaining > 0 ? 'Sample captured. ' + remaining + ' more — try a slightly different angle each time.' : 'All samples captured.', 'ok');
 
-      if (capturedDescriptors.length >= 3) {
+      if (capturedDescriptors.length >= FACE_SAMPLES_REQUIRED) {
         document.getElementById('btnCapture').style.display = 'none';
         document.getElementById('btnStep3Next').style.display = 'block';
       }
