@@ -65,8 +65,30 @@
       <div class="dot" id="dot4"></div>
     </div>
 
-    <!-- STEP 1: Basic details -->
-    <div class="step active" id="step1">
+    <!-- LANDING: Re-Enroll front and center -->
+    <div class="step active" id="stepLanding">
+      <div style="background:#fdf3e3; border-radius:10px; padding:16px; margin-bottom:16px; text-align:center;">
+        <div style="font-size:15px; font-weight:700; color:#8a6d1f; margin-bottom:6px;">🔄 Re-Enroll Your Face Identity</div>
+        <div style="font-size:13px; color:#8a6d1f;">Please rescan with 6 different selfies for better accuracy — takes under a minute.</div>
+      </div>
+      <button class="btn btn-gold" id="btnStartReEnroll">Start Re-Enrollment</button>
+
+      <div id="reEnrollForm" style="display:none; margin-top:16px;">
+        <label>Employee Code</label>
+        <input type="text" id="reEnrollEmpId" placeholder="e.g. AYHS009" style="text-transform:uppercase;">
+        <label>Your PIN</label>
+        <input type="password" id="reEnrollPin" maxlength="4" inputmode="numeric" placeholder="••••">
+        <button class="btn" id="btnReEnrollVerify">Verify & Continue</button>
+        <div id="msgReEnroll"></div>
+      </div>
+
+      <div style="text-align:center; margin-top:24px;">
+        <a href="#" id="linkNewStaff" style="font-size:13px; color:#888; text-decoration:underline;">New staff member? Enroll here instead</a>
+      </div>
+    </div>
+
+    <!-- STEP 1: Basic details (new staff, or fallback for existing incomplete enrollment) -->
+    <div class="step" id="step1">
       <label>Existing enrollment? Select your name</label>
       <select id="existingEmpSelect"><option value="">-- New staff member --</option></select>
 
@@ -140,6 +162,21 @@
 
     const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js/weights/';
     let currentEmployeeId = null;
+    let isReEnrollMode = false;
+
+    // Same persistent per-device ID mechanism as the daily attendance
+    // page — during re-enrollment, verifying via PIN forcibly claims
+    // this device for the entered employee code (fixes any prior
+    // mis-lock from a face-match error).
+    function getDeviceId_() {
+      let id = localStorage.getItem('athena_device_id');
+      if (!id) {
+        id = 'dev_' + Date.now() + '_' + Math.random().toString(36).substring(2, 12);
+        localStorage.setItem('athena_device_id', id);
+      }
+      return id;
+    }
+    const currentDeviceId = getDeviceId_();
     let currentRole = null;
     let docTypeList = [];
     let uploadedDocs = {};
@@ -168,6 +205,7 @@
 
     // ---------- Step navigation ----------
     function showStep(n) {
+      document.getElementById('stepLanding').classList.remove('active');
       document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
       document.getElementById('step' + n).classList.add('active');
       for (let i = 1; i <= 4; i++) {
@@ -180,6 +218,47 @@
       el.textContent = text;
       el.className = cls;
     }
+
+    // ---------- Landing: Re-Enroll (primary) vs New Staff (secondary) ----------
+    document.getElementById('btnStartReEnroll').addEventListener('click', function() {
+      document.getElementById('reEnrollForm').style.display = 'block';
+      this.style.display = 'none';
+    });
+
+    document.getElementById('linkNewStaff').addEventListener('click', function(e) {
+      e.preventDefault();
+      document.getElementById('stepLanding').classList.remove('active');
+      document.getElementById('step1').classList.add('active');
+      loadExistingEmployees();
+    });
+
+    document.getElementById('btnReEnrollVerify').addEventListener('click', async function() {
+      const empId = document.getElementById('reEnrollEmpId').value.trim().toUpperCase();
+      const pin = document.getElementById('reEnrollPin').value.trim();
+      const msg = document.getElementById('msgReEnroll');
+
+      if (!empId) { setMsg('msgReEnroll', 'Enter your Employee Code.', 'err'); return; }
+      if (!/^\d{4}$/.test(pin)) { setMsg('msgReEnroll', 'Enter your 4-digit PIN.', 'err'); return; }
+
+      this.disabled = true;
+      setMsg('msgReEnroll', 'Verifying…', 'info');
+      try {
+        const res = await apiPost('reEnrollVerify', { employeeId: empId, pin: pin, deviceId: currentDeviceId });
+        this.disabled = false;
+        if (!res.success) { setMsg('msgReEnroll', res.message, 'err'); return; }
+
+        currentEmployeeId = empId;
+        currentRole = res.role;
+        isReEnrollMode = true;
+        capturedDescriptors = [];
+        setMsg('msgReEnroll', '', '');
+        showStep(3);
+        loadFaceModels();
+      } catch (err) {
+        this.disabled = false;
+        setMsg('msgReEnroll', 'Error: ' + err.message, 'err');
+      }
+    });
 
     // ---------- Step 1 ----------
     async function loadExistingEmployees() {
@@ -400,10 +479,21 @@
       setMsg('msg3', 'Saving face data…', 'info');
       try {
         const res = await apiPost('saveFaceDescriptor', { employeeId: currentEmployeeId, descriptorArray: avg });
-        setMsg('msg3', res.message, res.success ? 'ok' : 'err');
-        if (res.success) showStep(4);
+        if (!res.success) { setMsg('msg3', res.message, 'err'); this.disabled = false; return; }
+
+        if (isReEnrollMode) {
+          document.getElementById('step3').innerHTML =
+            '<div style="text-align:center; background:#e3f6e8; color:#1a7a3c; padding:20px; border-radius:10px;">' +
+            '<div style="font-size:16px; font-weight:700; margin-bottom:8px;">✅ Re-Enrollment Complete</div>' +
+            '<div style="font-size:13px;">Your face has been re-enrolled with 6 fresh samples, and this device is now locked exclusively to your Employee Code (' + currentEmployeeId + ').</div>' +
+            '</div>';
+        } else {
+          setMsg('msg3', res.message, 'ok');
+          showStep(4);
+        }
       } catch (err) {
         setMsg('msg3', 'Error: ' + err.message, 'err');
+        this.disabled = false;
       }
     });
 
