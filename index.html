@@ -68,11 +68,13 @@
       <div id="confirmGreeting" style="font-size:18px; font-weight:700; color:#0f3d3e; margin:20px 0 6px;"></div>
       <div id="confirmActionLabel" style="font-size:15px; font-weight:700; padding:10px; border-radius:8px; margin-bottom:8px;"></div>
       <div id="confirmTime" style="font-size:13px; color:#666; margin-bottom:6px;"></div>
+      <div id="confirmBalances" style="display:none; display:none; gap:6px; margin-bottom:10px; text-align:center; font-size:11px; color:#555;"></div>
       <div id="confirmAbsentSummary" style="display:none; font-size:12px; color:#b3261e; background:#fde8e8; border-radius:8px; padding:8px 10px; margin-bottom:10px;"></div>
       <div id="confirmWarning" style="display:none; font-size:13px; color:#b3261e; background:#fde8e8; border-radius:8px; padding:10px; margin-bottom:10px;"></div>
       <button class="btn" id="btnConfirmAction" style="background:#1a5c5e;"></button>
       <button class="btn btn-manual" id="btnCancelAction" style="margin-top:8px;">Cancel — go back</button>
       <div id="confirmMsg"></div>
+      <div id="confirmCountdown" style="display:none; font-size:12px; color:#888; margin-top:10px;"></div>
     </div>
 
     <div id="historyView">
@@ -340,6 +342,24 @@
     let pendingEmpId = null;
     let pendingMethod = null;
 
+    async function showBalances(empId) {
+      const box = document.getElementById('confirmBalances');
+      box.style.display = 'none';
+      try {
+        const b = await apiGet('getMyBalances', { employeeId: empId });
+        if (b.lateDaysThisMonth === undefined) return;
+        const tile = function (label, val, color) {
+          return '<div style="flex:1; background:#f5f4ef; border-radius:8px; padding:8px 4px;">' +
+            '<div style="font-size:18px; font-weight:700; color:' + color + ';">' + val + '</div>' + label + '</div>';
+        };
+        box.innerHTML =
+          tile('Late Days<br>(this month)', b.lateDaysThisMonth, b.lateDaysThisMonth > 0 ? '#b3261e' : '#0f3d3e') +
+          tile('Leave<br>Balance', b.leaveBalance, b.leaveBalance < 0 ? '#b3261e' : '#0f3d3e') +
+          tile('Comp-Off<br>Available', b.compOffAvailable, '#b8952f');
+        box.style.display = 'flex';
+      } catch (err) { /* best-effort */ }
+    }
+
     async function showAbsentSummaryForMonth(empId) {
       const box = document.getElementById('confirmAbsentSummary');
       box.style.display = 'none';
@@ -384,6 +404,7 @@
       const nowStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
       document.getElementById('confirmTime').textContent = 'Current time: ' + nowStr;
 
+      showBalances(empId); // fire-and-forget
       showAbsentSummaryForMonth(empId); // fire-and-forget, doesn't block the rest of the screen
 
       // Already fully completed today (checked in AND out) — nothing
@@ -439,9 +460,15 @@
         const res = await apiPost(pendingAction, { employeeId: pendingEmpId, lat: currentLat, lng: currentLng, matchMethod: pendingMethod, deviceId: currentDeviceId });
         document.getElementById('confirmMsg').textContent = res.message;
         document.getElementById('confirmMsg').className = res.success ? 'ok' : 'err';
-        this.disabled = false;
         if (res.success) {
-          setTimeout(backToScanFromConfirm, 1200);
+          // Success: keep this screen (with balances / missed dates) up
+          // for 60 seconds so staff can read it, then return to scan.
+          this.style.display = 'none';
+          const cancelBtn = document.getElementById('btnCancelAction');
+          cancelBtn.textContent = 'Done';
+          startConfirmCountdown(60);
+        } else {
+          this.disabled = false;
         }
       } catch (err) {
         document.getElementById('confirmMsg').textContent = 'Error: ' + err.message;
@@ -450,9 +477,27 @@
       }
     });
 
+    let confirmTimer = null;
+    function startConfirmCountdown(seconds) {
+      const el = document.getElementById('confirmCountdown');
+      let left = seconds;
+      clearInterval(confirmTimer);
+      el.style.display = 'block';
+      el.textContent = 'Returning to scan screen in ' + left + 's';
+      confirmTimer = setInterval(function () {
+        left--;
+        if (left <= 0) { backToScanFromConfirm(); return; }
+        el.textContent = 'Returning to scan screen in ' + left + 's';
+      }, 1000);
+    }
+
     document.getElementById('btnCancelAction').addEventListener('click', backToScanFromConfirm);
 
     function backToScanFromConfirm() {
+      clearInterval(confirmTimer);
+      document.getElementById('confirmCountdown').style.display = 'none';
+      document.getElementById('btnCancelAction').textContent = 'Cancel — go back';
+      document.getElementById('btnConfirmAction').disabled = false;
       document.getElementById('confirmView').style.display = 'none';
       document.getElementById('scanView').style.display = 'block';
       document.getElementById('confirmMsg').textContent = '';
