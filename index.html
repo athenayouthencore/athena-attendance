@@ -71,7 +71,7 @@
       </div>
       <div class="scan-status" id="scanStatus">Tap below to start</div>
 
-      <button class="btn" id="btnStartCamera">Start Camera</button>
+      <button class="btn" id="btnStartCamera">Start — Check In / Out</button>
       <button class="btn" id="btnScan" style="display:none;" disabled>Loading…</button>
       <button class="btn btn-manual" id="btnManual" style="display:none;">Or check in using Staff ID &amp; PIN</button>
       <select id="manualSelect"></select>
@@ -205,26 +205,14 @@
         btn.style.display = 'none';
       } catch (err) {
         btn.disabled = false;
-        btn.textContent = 'Start Camera';
+        btn.textContent = 'Start — Check In / Out';
         document.getElementById('scanStatus').textContent = 'Camera access failed: ' + err.message;
         return;
       }
 
       requestLocation();
 
-      const scanBtn = document.getElementById('btnScan');
-      scanBtn.style.display = 'block';
-      scanBtn.disabled = !modelsReady || currentLat === null;
-      scanBtn.textContent = modelsReady ? 'Scan My Face' : 'Loading face models…';
-      if (!modelsReady) {
-        const waitForModels = setInterval(function() {
-          if (modelsReady) {
-            scanBtn.disabled = (currentLat === null);
-            scanBtn.textContent = 'Scan My Face';
-            clearInterval(waitForModels);
-          }
-        }, 300);
-      }
+      autoScan(); // one tap: camera + location + face scan + action
 
       // ID + PIN login is available immediately alongside face scan —
       // not gated behind failed face-scan attempts — since it still
@@ -249,7 +237,6 @@
       navigator.geolocation.getCurrentPosition(function(pos) {
         currentLat = pos.coords.latitude;
         currentLng = pos.coords.longitude;
-        document.getElementById('scanStatus').textContent = 'Position your face in frame and tap Scan';
         document.getElementById('btnScan').disabled = !modelsReady;
         hideRetryLocation();
       }, function(err) {
@@ -283,8 +270,8 @@
     }
 
     async function scanFace() {
-      if (!modelsReady) return;
-      if (currentLat === null) { setMsg('Waiting for location…', 'err'); return; }
+      if (!modelsReady) return 'wait';
+      if (currentLat === null) { return 'wait'; }
 
       document.getElementById('btnScan').disabled = true;
       document.getElementById('scanStatus').textContent = 'Scanning…';
@@ -296,8 +283,8 @@
       document.getElementById('btnScan').disabled = false;
 
       if (!detection) {
-        handleFailedScan('No face detected. Try better lighting.');
-        return;
+        handleFailedScan('No face detected. Look at the camera, good lighting helps.');
+        return 'nomatch';
       }
 
       let bestMatch = null, bestDist = 999;
@@ -311,10 +298,38 @@
         failedAttempts = 0;
         lastRecognizedId = bestMatch.id;
         lastRecognizedName = bestMatch.name;
-        showConfirmScreen(bestMatch.id, bestMatch.name, 'Face');
+        showConfirmScreen(bestMatch.id, bestMatch.name, 'Face', true);
+        return 'matched';
       } else {
-        handleFailedScan('Face not recognized. Try again with better lighting/angle.');
+        handleFailedScan('Face not recognized. Adjust angle / lighting.');
+        return 'nomatch';
       }
+    }
+
+    // Auto-scan loop: after one tap on Start, keep trying about every
+    // second until a face matches (or ~25 s pass), so nobody has to tap
+    // a separate "Scan My Face" button.
+    let autoScanning = false;
+    async function autoScan() {
+      if (autoScanning) return;
+      autoScanning = true;
+      const scanBtn = document.getElementById('btnScan');
+      scanBtn.style.display = 'none';
+      const deadline = Date.now() + 25000;
+      document.getElementById('scanStatus').textContent = 'Getting ready…';
+      while (autoScanning && Date.now() < deadline) {
+        if (!modelsReady || currentLat === null) { await new Promise(r => setTimeout(r, 400)); continue; }
+        document.getElementById('scanStatus').textContent = 'Look at the camera…';
+        const r = await scanFace();
+        if (r === 'matched') { autoScanning = false; return; }
+        await new Promise(r2 => setTimeout(r2, 700));
+      }
+      autoScanning = false;
+      // timed out — offer a manual retry
+      scanBtn.style.display = 'block';
+      scanBtn.disabled = false;
+      scanBtn.textContent = 'Try Again';
+      if (currentLat === null) document.getElementById('scanStatus').textContent = 'Location not available. Allow location, then tap Try Again.';
     }
 
     function handleFailedScan(text) {
@@ -408,7 +423,7 @@
       }
     }
 
-    async function showConfirmScreen(empId, empName, method) {
+    async function showConfirmScreen(empId, empName, method, auto) {
       setMsg('', '');
       const status = await apiGet('getStatus', { employeeId: empId });
 
@@ -475,6 +490,15 @@
           }
         }
       }
+
+      // One-step flow: a recognised face acts immediately — no second
+      // "Confirm" tap. (The 60-min check-out lock and the DONE state
+      // above already stop accidental repeats.)
+      if (auto && pendingAction) {
+        confirmBtn.style.display = 'none';
+        actionLabel.textContent = pendingAction === 'checkIn' ? 'Checking you in…' : 'Checking you out…';
+        confirmBtn.click();
+      }
     }
 
     document.getElementById('btnConfirmAction').addEventListener('click', async function() {
@@ -494,11 +518,13 @@
           startConfirmCountdown(60);
         } else {
           this.disabled = false;
+          if (!res.locked) { this.style.display = 'block'; this.textContent = 'Try Again'; }
         }
       } catch (err) {
         document.getElementById('confirmMsg').textContent = 'Error: ' + err.message;
         document.getElementById('confirmMsg').className = 'err';
         this.disabled = false;
+        this.style.display = 'block'; this.textContent = 'Try Again';
       }
     });
 
@@ -518,7 +544,17 @@
 
     document.getElementById('btnCancelAction').addEventListener('click', backToScanFromConfirm);
 
+    function resetCameraUi_() {
+      autoScanning = false;
+      const v = document.getElementById('video');
+      if (v.srcObject) { v.srcObject.getTracks().forEach(t => t.stop()); v.srcObject = null; }
+      const sb = document.getElementById('btnStartCamera');
+      sb.style.display = 'block'; sb.disabled = false; sb.textContent = 'Start — Check In / Out';
+      document.getElementById('btnScan').style.display = 'none';
+    }
+
     function backToScanFromConfirm() {
+      resetCameraUi_();
       clearInterval(confirmTimer);
       document.getElementById('confirmCountdown').style.display = 'none';
       document.getElementById('btnCancelAction').textContent = 'Cancel — go back';
@@ -527,7 +563,7 @@
       document.getElementById('scanView').style.display = 'block';
       document.getElementById('confirmMsg').textContent = '';
       document.getElementById('manualPin').value = '';
-      document.getElementById('scanStatus').textContent = 'Position your face in frame and tap Scan';
+      document.getElementById('scanStatus').textContent = 'Tap Start — then look at the camera';
     }
 
     function setMsg(text, cls) {
@@ -558,7 +594,7 @@
       });
     }
 
-    document.getElementById('btnScan').addEventListener('click', scanFace);
+    document.getElementById('btnScan').addEventListener('click', autoScan);
     document.getElementById('btnManual').addEventListener('click', showManual);
     document.getElementById('btnManualConfirm').addEventListener('click', manualConfirm);
     document.getElementById('btnShowHistory').addEventListener('click', showHistory);
