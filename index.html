@@ -38,6 +38,25 @@
     .status-present { color: #1a7a3c; font-weight: 600; }
     .status-absent { color: #b3261e; font-weight: 600; }
     #historyView { display: none; }
+
+    /* ---- Mobile: use the full screen, large camera view ---- */
+    @media (max-width: 600px) {
+      body { padding: 0; align-items: stretch; }
+      .card {
+        max-width: none; width: 100%; border-radius: 0; box-shadow: none;
+        min-height: 100vh; min-height: 100dvh;
+        padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+      }
+      h1 { font-size: 22px; }
+      .sub { font-size: 13px; margin-bottom: 14px; }
+      .video-wrap { border-radius: 14px; }
+      #scanView .video-wrap { aspect-ratio: 3 / 4; max-height: 62vh; max-height: 62dvh; background: #000; }
+      #scanView video { width: 100%; height: 100%; object-fit: cover; }
+      .btn { padding: 17px; font-size: 18px; }
+      .scan-status { font-size: 15px; }
+      #confirmGreeting { font-size: 22px !important; }
+      #confirmActionLabel { font-size: 17px !important; padding: 14px !important; }
+    }
   </style>
 </head>
 <body>
@@ -444,9 +463,14 @@
         // an accidental double-scan rather than an intentional early leave.
         if (status.checkInTime) {
           const minutesSinceCheckIn = (new Date() - new Date(status.checkInTime)) / 60000;
-          if (minutesSinceCheckIn < 15) {
+          if (minutesSinceCheckIn < 60) {
+            // Locked: server also enforces this, the button is just hidden for clarity.
+            const openAt = new Date(new Date(status.checkInTime).getTime() + 60 * 60000)
+              .toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
             warningBox.style.display = 'block';
-            warningBox.textContent = '⚠️ You checked in only ' + Math.round(minutesSinceCheckIn) + ' minute(s) ago. If this is a mistake, tap Cancel instead.';
+            warningBox.textContent = '🔒 You checked in ' + Math.round(minutesSinceCheckIn) + ' minute(s) ago. Check-out opens after ' + openAt + '.';
+            confirmBtn.style.display = 'none';
+            pendingAction = null;
           }
         }
       }
