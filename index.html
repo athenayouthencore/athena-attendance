@@ -58,6 +58,20 @@
       #confirmGreeting { font-size: 22px !important; }
       #confirmActionLabel { font-size: 17px !important; padding: 14px !important; }
     }
+
+    /* ---- Late-arrival flash screen ---- */
+    #lateFlash { position:fixed; inset:0; z-index:9999; display:none; align-items:center; justify-content:center; flex-direction:column; text-align:center; padding:24px;
+      background:linear-gradient(160deg,#b3261e 0%,#e8590c 55%,#f59f00 100%); color:#fff; }
+    #lateFlash.show { display:flex; animation:lateBg 0.9s ease-in-out 3; }
+    #lateFlash .lf-clock { font-size:84px; line-height:1; animation:lateShake 0.6s ease-in-out infinite; }
+    #lateFlash .lf-title { font-size:30px; font-weight:800; margin:14px 0 6px; animation:lateIn 0.6s ease-out both; }
+    #lateFlash .lf-sub { font-size:15px; opacity:.95; margin-bottom:18px; animation:lateIn 0.6s 0.15s ease-out both; }
+    #lateFlash .lf-quote { font-size:18px; font-weight:600; max-width:340px; background:rgba(255,255,255,.16); border-radius:14px; padding:16px 18px; animation:lateIn 0.6s 0.3s ease-out both; }
+    #lateFlash .lf-btn { margin-top:22px; background:#fff; color:#b3261e; font-weight:700; border:none; border-radius:999px; padding:12px 28px; font-size:15px; animation:lateIn 0.6s 0.45s ease-out both; }
+    #lateFlash .lf-timer { margin-top:10px; font-size:12px; opacity:.85; }
+    @keyframes lateBg { 0%,100% { filter:brightness(1); } 50% { filter:brightness(1.25); } }
+    @keyframes lateShake { 0%,100% { transform:rotate(0); } 20% { transform:rotate(-14deg); } 40% { transform:rotate(12deg); } 60% { transform:rotate(-8deg); } 80% { transform:rotate(6deg); } }
+    @keyframes lateIn { from { opacity:0; transform:translateY(24px) scale(.96); } to { opacity:1; transform:none; } }
   </style>
 </head>
 <body>
@@ -88,7 +102,7 @@
       <div id="confirmGreeting" style="font-size:18px; font-weight:700; color:#0f3d3e; margin:20px 0 6px;"></div>
       <div id="confirmActionLabel" style="font-size:15px; font-weight:700; padding:10px; border-radius:8px; margin-bottom:8px;"></div>
       <div id="confirmTime" style="font-size:13px; color:#666; margin-bottom:6px;"></div>
-      <div id="confirmBalances" style="display:none; display:none; gap:6px; margin-bottom:10px; text-align:center; font-size:11px; color:#555;"></div>
+      <div id="confirmMonthStats" style="display:none; margin-bottom:12px;"></div>
       <div id="confirmAbsentSummary" style="display:none; font-size:12px; color:#b3261e; background:#fde8e8; border-radius:8px; padding:8px 10px; margin-bottom:10px;"></div>
       <div id="confirmWarning" style="display:none; font-size:13px; color:#b3261e; background:#fde8e8; border-radius:8px; padding:10px; margin-bottom:10px;"></div>
       <button class="btn" id="btnConfirmAction" style="background:#1a5c5e;"></button>
@@ -156,24 +170,38 @@
       return resp.json();
     }
 
-    async function init() {
-      try {
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
-        ]);
-        modelsReady = true;
-        warmUpModels_(); // fire-and-forget — pre-compiles WebGL kernels so the person's actual first scan isn't the slow one
-      } catch (err) {
-        document.getElementById('scanStatus').textContent = 'Failed to load face models: ' + err.message;
-      }
+    let matchThreshold = 0.5;
+    let facesReady = false;
 
-      try {
-        enrolledFaces = await apiGet('getAllDescriptors');
-      } catch (err) {
-        document.getElementById('scanStatus').textContent = 'Failed to reach server: ' + err.message;
-      }
+    async function init() {
+      // Everything loads IN PARALLEL: models, enrolled faces, threshold.
+      // (Previously these ran one after another, and the threshold was
+      // re-fetched on every scan attempt — each a slow Apps Script call.)
+      const modelsP = (async function () {
+        try {
+          await Promise.all([
+            faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+            faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+            faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+          ]);
+          modelsReady = true;
+          warmUpModels_(); // pre-compiles WebGL kernels for ALL three nets
+        } catch (err) {
+          document.getElementById('scanStatus').textContent = 'Failed to load face models: ' + err.message;
+        }
+      })();
+      const facesP = (async function () {
+        try {
+          enrolledFaces = await apiGet('getAllDescriptors');
+          facesReady = true;
+        } catch (err) {
+          document.getElementById('scanStatus').textContent = 'Failed to reach server: ' + err.message;
+        }
+      })();
+      const thrP = (async function () {
+        try { const t = await apiGet('getMatchThreshold'); if (typeof t === 'number') matchThreshold = t; } catch (e) {}
+      })();
+      await Promise.all([modelsP, facesP, thrP]);
     }
 
     // Runs one throwaway detection pass on a blank canvas right after
@@ -184,9 +212,13 @@
     // doesn't have to pay that cost.
     async function warmUpModels_() {
       try {
-        const canvas = document.createElement('canvas');
-        canvas.width = 224; canvas.height = 224;
-        await faceapi.detectSingleFace(canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 224 }));
+        const c224 = document.createElement('canvas');
+        c224.width = 224; c224.height = 224;
+        await faceapi.detectSingleFace(c224, new faceapi.TinyFaceDetectorOptions({ inputSize: 160 }));
+        await faceapi.detectFaceLandmarks(c224);          // warms the landmark net
+        const c150 = document.createElement('canvas');
+        c150.width = 150; c150.height = 150;
+        await faceapi.computeFaceDescriptor(c150);        // warms the recognition net (the heaviest)
       } catch (err) {
         // warm-up is best-effort only — a failure here doesn't affect real scanning
       }
@@ -210,7 +242,7 @@
         return;
       }
 
-      requestLocation();
+      if (currentLat === null) requestLocation();
 
       autoScan(); // one tap: camera + location + face scan + action
 
@@ -270,14 +302,14 @@
     }
 
     async function scanFace() {
-      if (!modelsReady) return 'wait';
+      if (!modelsReady || !facesReady) return 'wait';
       if (currentLat === null) { return 'wait'; }
 
       document.getElementById('btnScan').disabled = true;
       document.getElementById('scanStatus').textContent = 'Scanning…';
 
       const video = document.getElementById('video');
-      const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224 }))
+      const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.5 }))
         .withFaceLandmarks().withFaceDescriptor();
 
       document.getElementById('btnScan').disabled = false;
@@ -293,7 +325,7 @@
         if (dist < bestDist) { bestDist = dist; bestMatch = f; }
       });
 
-      const threshold = await apiGet('getMatchThreshold');
+      const threshold = matchThreshold;
       if (bestMatch && bestDist < threshold) {
         failedAttempts = 0;
         lastRecognizedId = bestMatch.id;
@@ -318,11 +350,12 @@
       const deadline = Date.now() + 25000;
       document.getElementById('scanStatus').textContent = 'Getting ready…';
       while (autoScanning && Date.now() < deadline) {
-        if (!modelsReady || currentLat === null) { await new Promise(r => setTimeout(r, 400)); continue; }
+        const vEl = document.getElementById('video');
+        if (!modelsReady || !facesReady || currentLat === null || vEl.readyState < 2 || !vEl.videoWidth) { await new Promise(r => setTimeout(r, 150)); continue; }
         document.getElementById('scanStatus').textContent = 'Look at the camera…';
         const r = await scanFace();
         if (r === 'matched') { autoScanning = false; return; }
-        await new Promise(r2 => setTimeout(r2, 700));
+        await new Promise(r2 => setTimeout(r2, 120));
       }
       autoScanning = false;
       // timed out — offer a manual retry
@@ -377,21 +410,29 @@
     let pendingEmpId = null;
     let pendingMethod = null;
 
-    async function showBalances(empId) {
-      const box = document.getElementById('confirmBalances');
-      box.style.display = 'none';
+    // Month-to-date report card shown after a successful check-in / check-out.
+    async function showMonthStats(empId) {
+      const box = document.getElementById('confirmMonthStats');
       try {
         const b = await apiGet('getMyBalances', { employeeId: empId });
         if (b.lateDaysThisMonth === undefined) return;
-        const tile = function (label, val, color) {
-          return '<div style="flex:1; background:#f5f4ef; border-radius:8px; padding:8px 4px;">' +
-            '<div style="font-size:18px; font-weight:700; color:' + color + ';">' + val + '</div>' + label + '</div>';
+        const now = new Date();
+        const month = now.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+        const till = now.toLocaleString('en-IN', { day: 'numeric', month: 'short' });
+        const big = function (label, val, bad) {
+          const col = val > 0 ? bad : '#1a7a3c';
+          return '<div style="flex:1; background:#fff; border:2px solid ' + col + '; border-radius:12px; padding:12px 4px;">' +
+            '<div style="font-size:30px; font-weight:800; color:' + col + '; line-height:1;">' + val + '</div>' +
+            '<div style="font-size:11px; font-weight:600; color:#444; margin-top:6px;">' + label + '</div></div>';
         };
         box.innerHTML =
-          tile('Late Days<br>(this month)', b.lateDaysThisMonth, b.lateDaysThisMonth > 0 ? '#b3261e' : '#0f3d3e') +
-          tile('Leave<br>Balance', b.leaveBalance, b.leaveBalance < 0 ? '#b3261e' : '#0f3d3e') +
-          tile('Comp-Off<br>Available', b.compOffAvailable, '#b8952f');
-        box.style.display = 'flex';
+          '<div style="font-size:13px; font-weight:700; color:#0f3d3e; margin-bottom:8px;">📊 Your ' + month + ' so far (till ' + till + ')</div>' +
+          '<div style="display:flex; gap:8px; text-align:center;">' +
+            big('Late<br>Check-ins', b.lateDaysThisMonth, '#b3261e') +
+            big('Early<br>Check-outs', b.earlyCheckoutDaysThisMonth || 0, '#b8952f') +
+            big('Absent<br>Days', b.absentDaysThisMonth || 0, '#b3261e') +
+          '</div>';
+        box.style.display = 'block';
       } catch (err) { /* best-effort */ }
     }
 
@@ -425,11 +466,14 @@
 
     async function showConfirmScreen(empId, empName, method, auto) {
       setMsg('', '');
-      const status = await apiGet('getStatus', { employeeId: empId });
-
+      // Switch screens instantly so the person sees they were recognised;
+      // the status lookup below then fills in the rest.
       document.getElementById('scanView').style.display = 'none';
       document.getElementById('confirmView').style.display = 'block';
       document.getElementById('confirmGreeting').innerHTML = 'Hi ' + empName + '! <span style="font-size:12px; font-weight:400; color:#888;">(' + empId + ')</span>';
+      document.getElementById('confirmActionLabel').textContent = auto ? 'Recognised ✓  one moment…' : '';
+      document.getElementById('btnConfirmAction').style.display = 'none';
+      const status = await apiGet('getStatus', { employeeId: empId });
 
       const actionLabel = document.getElementById('confirmActionLabel');
       const confirmBtn = document.getElementById('btnConfirmAction');
@@ -439,7 +483,6 @@
       const nowStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
       document.getElementById('confirmTime').textContent = 'Current time: ' + nowStr;
 
-      showBalances(empId); // fire-and-forget
       showAbsentSummaryForMonth(empId); // fire-and-forget, doesn't block the rest of the screen
 
       // Already fully completed today (checked in AND out) — nothing
@@ -510,12 +553,14 @@
         document.getElementById('confirmMsg').textContent = res.message;
         document.getElementById('confirmMsg').className = res.success ? 'ok' : 'err';
         if (res.success) {
-          // Success: keep this screen (with balances / missed dates) up
-          // for 60 seconds so staff can read it, then return to scan.
+          // Success: keep this screen (with month-to-date stats / balances / missed dates) up
+          // for 2 minutes so staff can read it, then return to scan.
           this.style.display = 'none';
           const cancelBtn = document.getElementById('btnCancelAction');
           cancelBtn.textContent = 'Done';
-          startConfirmCountdown(60);
+          startConfirmCountdown(120);
+          showMonthStats(pendingEmpId);
+          if (pendingAction === 'checkIn' && (res.late === true || /\(Late\)/.test(res.message || ''))) showLateFlash(res);
         } else {
           this.disabled = false;
           if (!res.locked) { this.style.display = 'block'; this.textContent = 'Try Again'; }
@@ -528,17 +573,56 @@
       }
     });
 
+
+    // ---- Late-arrival flash: shown right after a successful LATE check-in ----
+    const LATE_QUOTES = [
+      'Early birds shape the day. Tomorrow, beat the clock! 🌅',
+      'Every minute counts — start 10 minutes earlier tomorrow and own your morning. 💪',
+      'Our patients are counting on us. A punctual start sets the tone for the whole team. 🤝',
+      'Tomorrow is a fresh start — be here before the cut-off and win the day! 🏆',
+      'Great teams start together. Be early, be ready, be Athena. ✨',
+      'The morning belongs to those who show up first. See you early tomorrow! 🚀'
+    ];
+    let lateFlashTimer = null;
+    function showLateFlash(res) {
+      try {
+        const m = res && res.lateMinutes;
+        const start = (res && res.workStartLabel) || '10:00 AM';
+        const grace = (res && res.graceUntilLabel) || '10:10 AM';
+        document.getElementById('lfTitle').textContent = 'You are late today';
+        document.getElementById('lfSub').innerHTML = (m && m > 0 ? 'You arrived <b>' + m + ' min</b> after the ' + start + ' start time.' : 'Check-in after ' + grace + ' is marked Late.') +
+          '<br><span style="font-size:12px; opacity:.9;">(The grace period till ' + grace + ' has passed.)</span>';
+        document.getElementById('lfQuote').textContent = LATE_QUOTES[Math.floor(Math.random() * LATE_QUOTES.length)];
+        document.getElementById('lateFlash').className = 'show';
+        if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 300]);
+        let left = 8;
+        const t = document.getElementById('lfTimer');
+        t.textContent = 'Closing in ' + left + 's';
+        clearInterval(lateFlashTimer);
+        lateFlashTimer = setInterval(function () {
+          left--;
+          if (left <= 0) { hideLateFlash(); return; }
+          t.textContent = 'Closing in ' + left + 's';
+        }, 1000);
+      } catch (e) {}
+    }
+    function hideLateFlash() {
+      clearInterval(lateFlashTimer);
+      document.getElementById('lateFlash').className = '';
+    }
+
     let confirmTimer = null;
+    function fmtLeft_(s) { return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
     function startConfirmCountdown(seconds) {
       const el = document.getElementById('confirmCountdown');
       let left = seconds;
       clearInterval(confirmTimer);
       el.style.display = 'block';
-      el.textContent = 'Returning to scan screen in ' + left + 's';
+      el.textContent = 'Returning to scan screen in ' + fmtLeft_(left);
       confirmTimer = setInterval(function () {
         left--;
         if (left <= 0) { backToScanFromConfirm(); return; }
-        el.textContent = 'Returning to scan screen in ' + left + 's';
+        el.textContent = 'Returning to scan screen in ' + fmtLeft_(left);
       }, 1000);
     }
 
@@ -557,6 +641,7 @@
       resetCameraUi_();
       clearInterval(confirmTimer);
       document.getElementById('confirmCountdown').style.display = 'none';
+      document.getElementById('confirmMonthStats').style.display = 'none';
       document.getElementById('btnCancelAction').textContent = 'Cancel — go back';
       document.getElementById('btnConfirmAction').disabled = false;
       document.getElementById('confirmView').style.display = 'none';
@@ -604,6 +689,17 @@
     });
 
     init();
+    // Prefetch location at page load so it's ready the moment Start is tapped.
+    if (navigator.geolocation) requestLocation(); // prefetch
   </script>
+
+  <div id="lateFlash" onclick="hideLateFlash()">
+    <div class="lf-clock">⏰</div>
+    <div class="lf-title" id="lfTitle">You are late today</div>
+    <div class="lf-sub" id="lfSub"></div>
+    <div class="lf-quote" id="lfQuote"></div>
+    <button class="lf-btn" type="button">Got it — see you early tomorrow! 💪</button>
+    <div class="lf-timer" id="lfTimer"></div>
+  </div>
 </body>
 </html>
